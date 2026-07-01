@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>手勢粒子控制 + AI</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0a0a1a;
+      overflow: hidden;
+      font-family: 'Segoe UI', sans-serif;
+      color: #fff;
+      user-select: none;
+    }
+    canvas { display: block; }
+    #overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      pointer-events: none;
+      z-index: 10;
+    }
+    #status {
+      position: fixed;
+      bottom: 20px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,0.6);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 16px;
+      padding: 10px 24px;
+      font-size: 14px;
+      z-index: 20;
+      pointer-events: none;
+      white-space: nowrap;
+      transition: opacity 0.3s;
+    }
+    #status .gesture { color: #6cf; font-weight: 600; }
+    #status .ai { color: #f6a; font-weight: 600; }
+    #tutorial {
+      position: fixed;
+      top: 20px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,0.5);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 12px;
+      padding: 12px 20px;
+      font-size: 13px;
+      z-index: 20;
+      pointer-events: none;
+      text-align: center;
+      line-height: 1.6;
+      opacity: 0;
+      transition: opacity 0.5s;
+    }
+    #tutorial.show { opacity: 1; }
+    #tutorial span { display: inline-block; margin: 0 6px; padding: 2px 10px; border-radius: 6px; background: rgba(255,255,255,0.08); }
+    #tutorial .highlight { color: #6cf; }
+    .label-tip {
+      position: fixed;
+      bottom: 80px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 12px;
+      color: rgba(255,255,255,0.3);
+      z-index: 20;
+      pointer-events: none;
+    }
+    #loading {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: #0a0a1a;
+      z-index: 100;
+      transition: opacity 0.8s;
+    }
+    #loading.hidden { opacity: 0; pointer-events: none; }
+    #loading .spinner {
+      width: 48px; height: 48px;
+      border: 3px solid rgba(255,255,255,0.1);
+      border-top-color: #6cf;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    #loading p { margin-top: 20px; color: rgba(255,255,255,0.5); font-size: 14px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #aiOverlay {
+      position: fixed;
+      top: 20px; right: 20px;
+      z-index: 15;
+      pointer-events: none;
+    }
+    #aiBubble {
+      background: rgba(255, 105, 180, 0.15);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 105, 180, 0.2);
+      border-radius: 16px;
+      padding: 12px 18px;
+      max-width: 260px;
+      font-size: 13px;
+      line-height: 1.5;
+      opacity: 0;
+      transform: translateY(10px);
+      transition: all 0.4s;
+    }
+    #aiBubble.show { opacity: 1; transform: translateY(0); }
+    #aiBubble .label { color: #f6a; font-size: 11px; margin-bottom: 4px; }
+    #fps {
+      position: fixed;
+      top: 20px; left: 20px;
+      font-size: 13px;
+      font-family: 'Courier New', monospace;
+      color: rgba(255,255,255,0.4);
+      z-index: 20;
+      pointer-events: none;
+      background: rgba(0,0,0,0.3);
+      padding: 4px 10px;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.05);
+    }
+    #discordBadge {
+      position: fixed;
+      bottom: 20px; right: 20px;
+      z-index: 20;
+      pointer-events: auto;
+      background: rgba(88, 101, 242, 0.12);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(88, 101, 242, 0.25);
+      border-radius: 12px;
+      padding: 8px 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: #8ea1e1;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    #discordBadge:hover {
+      background: rgba(88, 101, 242, 0.2);
+      border-color: rgba(88, 101, 242, 0.4);
+    }
+    #discordBadge .icon {
+      width: 28px; height: 28px;
+      background: #5865f2;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      color: #fff;
+      flex-shrink: 0;
+    }
+    #discordBadge .name { font-weight: 500; }
+    #discordBadge .status {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #3ba55d;
+      display: inline-block;
+      margin-right: 4px;
+    }
+
+    #aiErrorOverlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(10, 10, 26, 0.92);
+      backdrop-filter: blur(12px);
+      z-index: 200;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 40px;
+    }
+    #aiErrorOverlay.show { display: flex; }
+    #aiErrorOverlay .icon {
+      width: 80px; height: 80px;
+      border: 3px solid rgba(255, 80, 80, 0.4);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 40px;
+      margin-bottom: 24px;
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 0 20px rgba(255, 80, 80, 0.2); }
+      50% { box-shadow: 0 0 40px rgba(255, 80, 80, 0.5); }
+    }
+    #aiErrorOverlay h2 {
+      font-size: 24px;
+      color: #ff6b6b;
+      margin-bottom: 12px;
+      font-weight: 600;
+    }
+    #aiErrorOverlay p {
+      color: rgba(255,255,255,0.6);
+      font-size: 16px;
+      line-height: 1.6;
+      max-width: 440px;
+      margin-bottom: 8px;
+    }
+    #aiErrorOverlay .discord {
+      display: inline-block;
+      margin-top: 16px;
+      padding: 12px 28px;
+      background: rgba(114, 137, 218, 0.15);
+      border: 1px solid rgba(114, 137, 218, 0.3);
+      border-radius: 12px;
+      color: #7289da;
+      font-size: 18px;
+      font-weight: 600;
+      letter-spacing: 1px;
+    }
+    #aiErrorOverlay .retry-btn {
+      margin-top: 24px;
+      padding: 10px 28px;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 10px;
+      color: rgba(255,255,255,0.5);
+      font-size: 14px;
+      cursor: pointer;
+      pointer-events: all;
+      transition: all 0.2s;
+    }
+    #aiErrorOverlay .retry-btn:hover {
+      background: rgba(255,255,255,0.1);
+      color: #fff;
+    }
+    #aiErrorOverlay .fallback-hint {
+      margin-top: 20px;
+      font-size: 13px;
+      color: rgba(255,255,255,0.25);
+    }
+  </style>
+</head>
+<body>
+  <div id="loading">
+    <div class="spinner"></div>
+    <p>正在載入手勢辨識模型...</p>
+  </div>
+
+  <canvas id="canvas"></canvas>
+  <div id="overlay"></div>
+
+  <div id="tutorial">
+    <span>🖐 張開手掌</span> 擴散粒子
+    <span>✊ 握拳</span> 凝聚粒子
+    <span>☝️ 食指比一</span> 跟隨手指
+    <span>🤏 捏合</span> 爆炸效果
+    <span>👋 左右揮</span> 粒子流動
+  </div>
+
+  <div id="aiOverlay">
+    <div id="aiBubble">
+      <div class="label">🤖 AI 助手</div>
+      <div id="aiText">偵測到姿勢，請說話...</div>
+    </div>
+  </div>
+
+  <div id="status">
+    🖐 姿勢: <span class="gesture" id="gestureLabel">等待中...</span>
+    &nbsp;&nbsp;|&nbsp;&nbsp;
+    🤖 AI: <span class="ai" id="aiLabel">閒置</span>
+  </div>
+  <div id="fps">-- FPS</div>
+  <div id="discordBadge" onclick="navigator.clipboard.writeText('feliex1279');showAIBubble('📋 Discord 已複製：feliex1279')">
+    <div class="icon">💬</div>
+    <div>
+      <div class="name">feliex1279</div>
+      <div style="font-size:11px;color:rgba(142,161,225,0.6)"><span class="status"></span>線上</div>
+    </div>
+  </div>
+  <div class="label-tip">舉起手掌靠近鏡頭 · Space 爆炸 · R 重置</div>
+
+  <!-- AI Server Error Overlay -->
+  <div id="aiErrorOverlay">
+    <div class="icon">⚠️</div>
+    <h2>AI 伺服器未開啟</h2>
+    <p>無法連接到 AI 伺服器，請確認伺服器已啟動。</p>
+    <p id="errorHint">本機測試會因 CORS 被封鎖，請部署到 Vercel 或執行 <b>vercel dev</b></p>
+    <p>若需協助，請聯繫：</p>
+    <div class="discord">📱 feliex1279</div>
+    <button class="retry-btn" onclick="checkAIServer()">🔄 重新檢測</button>
+    <div style="margin-top:16px;font-size:13px;color:rgba(255,255,255,0.5)">可用 <b>curl</b> 測試伺服器：<br><code style="font-size:11px;background:rgba(255,255,255,0.05);padding:4px 8px;border-radius:4px;">curl -X POST http://chung-cht1.taiwanfrp.me:11434/api/generate -d "{\"model\":\"qwen2.5:7b\",\"prompt\":\"hi\",\"stream\":false}"</code></div>
+    <div id="lastError" style="margin-top:12px;font-size:12px;color:rgba(255,255,255,0.3);max-width:400px;word-break:break-all;"></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1675466862/camera_utils.js"></script>
+
+  <script>
+    // ============ Configuration ============
+    const CONFIG = {
+      particleCount: 600,
+      particleSize: 3,
+      baseSpeed: 0.5,
+      attractStrength: 0.03,
+      repelStrength: 0.08,
+      explodeStrength: 6,
+      trailAlpha: 0.3,
+      // AI Server
+      aiServerDirect: 'http://chung-cht1.taiwanfrp.me:11434',
+      aiServerProxy: '/api/proxy',
+      aiServerModel: 'qwen2.5:7b',
+      aiFallbackMode: false,  // set to true to skip server check
+    };
+
+    // ============ Canvas Setup ============
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    let W, H;
+
+    function resize() {
+      W = canvas.width = window.innerWidth;
+      H = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // ============ Particle System ============
+    class Particle {
+      constructor() {
+        this.reset(true);
+      }
+      reset(rand = false) {
+        if (rand) {
+          this.x = Math.random() * W;
+          this.y = Math.random() * H;
+          this.vx = (Math.random() - 0.5) * CONFIG.baseSpeed;
+          this.vy = (Math.random() - 0.5) * CONFIG.baseSpeed;
+          this.baseX = this.x;
+          this.baseY = this.y;
+        } else {
+          this.x = this.baseX;
+          this.y = this.baseY;
+          this.vx = 0;
+          this.vy = 0;
+        }
+        this.size = CONFIG.particleSize * (0.5 + Math.random() * 0.8);
+        this.hue = Math.random() * 360;
+        this.saturation = 60 + Math.random() * 40;
+        this.lightness = 50 + Math.random() * 30;
+        this.alpha = 0.4 + Math.random() * 0.6;
+        this.trail = [];
+      }
+      update(forces) {
+        const { handPos, gesture, pinchPos, swipeDir } = forces;
+
+        // Ambient drift when no hand detected
+        if (!handPos) {
+          this.vx += (Math.random() - 0.5) * 0.08;
+          this.vy += (Math.random() - 0.5) * 0.08;
+          if (Math.random() < 0.005) {
+            this.baseX = Math.random() * W;
+            this.baseY = Math.random() * H;
+          }
+        }
+
+        // Return to base
+        let dx = this.baseX - this.x;
+        let dy = this.baseY - this.y;
+        this.vx += dx * 0.002;
+        this.vy += dy * 0.002;
+
+        // Hand interaction
+        if (handPos) {
+          const hdx = this.x - handPos.x;
+          const hdy = this.y - handPos.y;
+          const dist = Math.sqrt(hdx * hdx + hdy * hdy);
+          if (dist < 300) {
+            const force = (1 - dist / 300);
+            if (gesture === 'fist') {
+              // Attract to hand
+              this.vx -= hdx * force * CONFIG.attractStrength * 2;
+              this.vy -= hdy * force * CONFIG.attractStrength * 2;
+            } else if (gesture === 'open') {
+              // Repel from hand
+              this.vx += hdx * force * CONFIG.repelStrength;
+              this.vy += hdy * force * CONFIG.repelStrength;
+            } else if (gesture === 'point') {
+              // Follow finger
+              this.vx += (handPos.x - this.x) * force * CONFIG.attractStrength * 3;
+              this.vy += (handPos.y - this.y) * force * CONFIG.attractStrength * 3;
+            }
+          }
+        }
+
+        // Pinch explosion
+        if (pinchPos) {
+          const pdx = this.x - pinchPos.x;
+          const pdy = this.y - pinchPos.y;
+          const pDist = Math.sqrt(pdx * pdx + pdy * pdy);
+          if (pDist < 200) {
+            const force = (1 - pDist / 200) * CONFIG.explodeStrength;
+            this.vx += (pdx / (pDist || 1)) * force;
+            this.vy += (pdy / (pDist || 1)) * force;
+          }
+        }
+
+        // Swipe flow
+        if (swipeDir && gesture === 'swipe') {
+          this.vx += swipeDir.x * 0.5;
+          this.vy += swipeDir.y * 0.5;
+        }
+
+        // Damping
+        this.vx *= 0.96;
+        this.vy *= 0.96;
+
+        // Speed limit
+        const speed = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+        const maxSpeed = 8;
+        if (speed > maxSpeed) {
+          this.vx = (this.vx / speed) * maxSpeed;
+          this.vy = (this.vy / speed) * maxSpeed;
+        }
+
+        this.x += this.vx;
+        this.y += this.vy;
+
+        // Wrap around
+        if (this.x < -50) this.x = W + 50;
+        if (this.x > W + 50) this.x = -50;
+        if (this.y < -50) this.y = H + 50;
+        if (this.y > H + 50) this.y = -50;
+      }
+      draw(ctx) {
+        const alpha = this.alpha * CONFIG.trailAlpha;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fillStyle = `hsla(${this.hue}, ${this.saturation}%, ${this.lightness}%, ${alpha})`;
+        ctx.fill();
+
+        // Glow
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = `hsla(${this.hue}, 80%, 60%, ${alpha * 0.3})`;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+    }
+
+    let particles = [];
+    for (let i = 0; i < CONFIG.particleCount; i++) {
+      particles.push(new Particle());
+    }
+
+    // ============ Hand Tracking State ============
+    let handState = {
+      detected: false,
+      gesture: 'none',
+      handPos: null,
+      pinchPos: null,
+      swipeDir: null,
+      prevHandX: 0,
+      prevHandY: 0,
+      swipeBuffer: [],
+    };
+
+    // ============ Gesture Recognition ============
+    function recognizeGesture(landmarks) {
+      // Landmark indices
+      const WRIST = 0;
+      const THUMB_TIP = 4;
+      const INDEX_TIP = 8;
+      const INDEX_PIP = 6;
+      const INDEX_MCP = 5;
+      const MIDDLE_TIP = 12;
+      const MIDDLE_PIP = 10;
+      const RING_TIP = 16;
+      const RING_PIP = 14;
+      const PINKY_TIP = 20;
+      const PINKY_PIP = 18;
+
+      // Helper: distance between two landmarks
+      const dist = (a, b) => Math.sqrt(
+        (landmarks[a].x - landmarks[b].x) ** 2 +
+        (landmarks[a].y - landmarks[b].y) ** 2
+      );
+
+      // Helper: is finger extended? (tip farther from MCP than PIP is)
+      const isExtended = (tip, pip, mcp) => {
+        const tipToMcp = dist(tip, mcp);
+        const pipToMcp = dist(pip, mcp);
+        return tipToMcp > pipToMcp * 1.15;
+      };
+
+      const thumbExt = isExtended(THUMB_TIP, 3, 2);
+      const indexExt = isExtended(INDEX_TIP, INDEX_PIP, INDEX_MCP);
+      const middleExt = isExtended(MIDDLE_TIP, MIDDLE_PIP, 9);
+      const ringExt = isExtended(RING_TIP, RING_PIP, 13);
+      const pinkyExt = isExtended(PINKY_TIP, PINKY_PIP, 17);
+
+      // Pinch: thumb tip close to index tip
+      const pinchDist = dist(THUMB_TIP, INDEX_TIP);
+      const isPinch = pinchDist < 0.06;
+
+      // Count extended fingers
+      const extendedCount = [indexExt, middleExt, ringExt, pinkyExt].filter(Boolean).length;
+      const allExtended = thumbExt && indexExt && middleExt && ringExt && pinkyExt;
+
+      if (isPinch) {
+        return { gesture: 'pinch', pinchPos: {
+          x: (landmarks[THUMB_TIP].x + landmarks[INDEX_TIP].x) / 2 * W,
+          y: (landmarks[THUMB_TIP].y + landmarks[INDEX_TIP].y) / 2 * H,
+        }};
+      }
+
+      if (allExtended) return { gesture: 'open' };
+      if (extendedCount === 0 && !thumbExt) return { gesture: 'fist' };
+      if (indexExt && !middleExt && !ringExt && !pinkyExt) return { gesture: 'point' };
+      if (indexExt && middleExt && !ringExt && !pinkyExt) return { gesture: 'peace' };
+
+      return { gesture: 'open' };
+    }
+
+    function detectSwipe(currentX, currentY) {
+      handState.swipeBuffer.push({ x: currentX - handState.prevHandX, y: currentY - handState.prevHandY });
+      if (handState.swipeBuffer.length > 10) handState.swipeBuffer.shift();
+      handState.prevHandX = currentX;
+      handState.prevHandY = currentY;
+
+      if (handState.swipeBuffer.length < 5) return null;
+
+      const avgX = handState.swipeBuffer.reduce((s, v) => s + v.x, 0) / handState.swipeBuffer.length;
+      const avgY = handState.swipeBuffer.reduce((s, v) => s + v.y, 0) / handState.swipeBuffer.length;
+      const magnitude = Math.sqrt(avgX * avgX + avgY * avgY);
+
+      if (magnitude > 15) {
+        return { x: avgX / magnitude, y: avgY / magnitude };
+      }
+      return null;
+    }
+
+    // ============ AI Integration ============
+    let aiServerOnline = false;
+
+    async function checkAIServer() {
+      const errorOverlay = document.getElementById('aiErrorOverlay');
+      const lastError = document.getElementById('lastError');
+      const errHint = document.getElementById('errorHint');
+
+      // Detect file:// or localhost (CORS will block direct AI server fetch)
+      const isFile = location.protocol === 'file:';
+      const isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+      if (isFile) {
+        errorOverlay.classList.add('show');
+        document.querySelector('#aiErrorOverlay h2').textContent = '⚠️ 請用 HTTP 伺服器開啟';
+        document.querySelector('#aiErrorOverlay .discord').textContent = 'npx serve';
+        updateAIStatus('無法連線 ❌');
+        return false;
+      }
+      if (isLocal && errHint) {
+        errHint.innerHTML = '本機測試會被 CORS 封鎖，請部署到 Vercel 或用 <b>curl</b> 測試';
+      }
+
+      updateAIStatus('檢測伺服器...');
+
+      let corsDetected = false;
+
+      async function probe(url, init) {
+        try {
+          const resp = await fetch(url, { ...init, signal: AbortSignal.timeout(4000) });
+          return resp.ok;
+        } catch (e) {
+          console.warn('AI probe failed:', url, e.message);
+          if (lastError) lastError.textContent = e.message;
+          if (e.message.includes('CORS') || e.message.includes('cors')) corsDetected = true;
+          if (e.name === 'TypeError' && e.message.includes('fetch')) corsDetected = true;
+          return false;
+        }
+      }
+
+      const endpoints = ['/api/tags', '/api/generate'];
+      const targets = [];
+      for (const ep of endpoints) {
+        targets.push(CONFIG.aiServerProxy + '?path=' + encodeURIComponent(ep));
+        targets.push(CONFIG.aiServerDirect + ep);
+      }
+
+      for (const url of targets) {
+        const isGenerate = url.includes('%2Fapi%2Fgenerate') || url.endsWith('/api/generate');
+        const ok = await probe(url, isGenerate
+          ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: CONFIG.aiServerModel, prompt: 'hi', stream: false }) }
+          : {});
+        if (ok) {
+          aiServerOnline = true;
+          errorOverlay.classList.remove('show');
+          updateAIStatus('伺服器連線 ✅');
+          showAIBubble('🤖 AI 伺服器已連線！');
+          return true;
+        }
+      }
+
+      aiServerOnline = false;
+      errorOverlay.classList.add('show');
+      if (corsDetected && errHint) {
+        errHint.innerHTML = '⚠️ CORS 被封鎖 — 請部署到 Vercel（本機無法直接連線）或用 <b>vercel dev</b> 模擬';
+      }
+      updateAIStatus('伺服器離線 ❌');
+      return false;
+    }
+
+    class AIAssistant {
+      constructor() {
+        this.lastGesture = '';
+      }
+
+      async pingServer() {
+        try {
+          const resp = await fetch(CONFIG.aiServerUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: CONFIG.aiServerModel,
+              prompt: 'hi',
+              stream: false,
+            }),
+            signal: AbortSignal.timeout(5000),
+          });
+          return resp.ok;
+        } catch {
+          return false;
+        }
+      }
+
+      onGestureChange(gesture) {
+        if (gesture === this.lastGesture) return;
+        this.lastGesture = gesture;
+
+        const messages = {
+          'open': '張開手掌，粒子正在擴散',
+          'fist': '握拳狀態，粒子向你集中',
+          'point': '食指模式，粒子跟隨你的手指',
+          'pinch': '捏合手勢，產生爆炸效果',
+          'swipe': '揮動手勢，粒子隨之流動',
+          'peace': 'YA！✌️',
+        };
+
+        if (messages[gesture]) {
+          showAIBubble(`🤖 ${messages[gesture]}`);
+        }
+      }
+    }
+
+    // ============ UI Updates ============
+    function updateGestureLabel(text) {
+      document.getElementById('gestureLabel').textContent = text;
+    }
+
+    function updateAIStatus(text) {
+      document.getElementById('aiLabel').textContent = text;
+    }
+
+    function showAIBubble(text) {
+      const bubble = document.getElementById('aiBubble');
+      const textEl = document.getElementById('aiText');
+      textEl.textContent = text;
+      bubble.classList.add('show');
+      clearTimeout(bubble._hideTimer);
+      bubble._hideTimer = setTimeout(() => {
+        bubble.classList.remove('show');
+      }, 4000);
+    }
+
+    // ============ Camera & Hand Tracking ============
+    const videoElement = document.createElement('video');
+    videoElement.style.position = 'fixed';
+    videoElement.style.right = '20px';
+    videoElement.style.bottom = '80px';
+    videoElement.style.width = '160px';
+    videoElement.style.height = '120px';
+    videoElement.style.borderRadius = '12px';
+    videoElement.style.border = '2px solid rgba(255,255,255,0.1)';
+    videoElement.style.transform = 'scaleX(-1)';
+    videoElement.style.zIndex = '15';
+    videoElement.style.objectFit = 'cover';
+    videoElement.style.background = '#000';
+    document.body.appendChild(videoElement);
+
+    const hands = new Hands({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${file}`
+    });
+    hands.setOptions({
+      maxNumHands: 1,
+      modelComplexity: 1,
+      minDetectionConfidence: 0.7,
+      minTrackingConfidence: 0.5,
+    });
+
+    hands.onResults((results) => {
+      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        const landmarks = results.multiHandLandmarks[0];
+        const wrist = landmarks[0];
+        const handX = (1 - wrist.x) * W;
+        const handY = wrist.y * H;
+
+        const result = recognizeGesture(landmarks);
+        handState.gesture = result.gesture;
+        handState.detected = true;
+        handState.handPos = { x: handX, y: handY };
+        handState.pinchPos = result.pinchPos || null;
+
+        const swipe = detectSwipe(handX, handY);
+        if (swipe) { handState.swipeDir = swipe; handState.gesture = 'swipe'; }
+        else { handState.swipeDir = null; }
+
+        const labels = {
+          'open': '🖐 張開', 'fist': '✊ 握拳', 'point': '☝️ 食指',
+          'pinch': '🤏 捏合', 'swipe': '👋 揮動', 'peace': '✌️ 勝利',
+        };
+        updateGestureLabel(labels[handState.gesture] || '🖐 偵測中');
+      } else {
+        handState.detected = false;
+        handState.gesture = 'none';
+        handState.handPos = null;
+        handState.pinchPos = null;
+        handState.swipeDir = null;
+        updateGestureLabel('等待手勢...');
+      }
+    });
+
+    const camera = new Camera(videoElement, {
+      onFrame: async () => {
+        try { await hands.send({ image: videoElement }); } catch (e) {}
+      },
+      width: 320, height: 240,
+    });
+
+    // Keyboard controls
+    document.addEventListener('keydown', (e) => {
+      if (e.key === ' ' || e.key === 'Space') {
+        e.preventDefault();
+        handState.gesture = 'pinch';
+        handState.pinchPos = { x: W / 2, y: H / 2 };
+        setTimeout(() => { handState.pinchPos = null; }, 300);
+      }
+      if (e.key === 'r' || e.key === 'R') {
+        particles.forEach(p => p.reset(true));
+      }
+    });
+
+    // ============ Main Loop ============
+    const ai = new AIAssistant();
+
+    function drawConnectingLines() {
+      for (let i = 0; i < particles.length; i++) {
+        for (let j = i + 1; j < particles.length; j++) {
+          const dx = particles[i].x - particles[j].x;
+          const dy = particles[i].y - particles[j].y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < 80) {
+            const alpha = (1 - dist / 80) * 0.2;
+            ctx.beginPath();
+            ctx.moveTo(particles[i].x, particles[i].y);
+            ctx.lineTo(particles[j].x, particles[j].y);
+            ctx.strokeStyle = `rgba(100, 200, 255, ${alpha})`;
+            ctx.lineWidth = 0.5;
+            ctx.stroke();
+          }
+        }
+      }
+    }
+
+    let frameCount = 0, lastFpsUpdate = 0;
+
+    function animate(timestamp) {
+      frameCount++;
+      if (timestamp - lastFpsUpdate > 1000) {
+        document.getElementById('fps').textContent = `${frameCount} FPS | ${particles.length} particles`;
+        frameCount = 0;
+        lastFpsUpdate = timestamp;
+      }
+
+      ctx.fillStyle = `rgba(10, 10, 26, ${CONFIG.trailAlpha})`;
+      ctx.fillRect(0, 0, W, H);
+
+      // Update particles
+      const forces = {
+        handPos: handState.handPos,
+        gesture: handState.gesture,
+        pinchPos: handState.pinchPos,
+        swipeDir: handState.swipeDir,
+      };
+
+      particles.forEach(p => p.update(forces));
+      particles.forEach(p => p.draw(ctx));
+
+      // Draw connecting lines
+      drawConnectingLines();
+
+      // Draw hand indicator
+      if (handState.handPos && handState.detected) {
+        const { x, y } = handState.handPos;
+        const colors = {
+          'open': 'rgba(100, 200, 255, 0.3)',
+          'fist': 'rgba(255, 100, 100, 0.3)',
+          'point': 'rgba(100, 255, 100, 0.3)',
+          'pinch': 'rgba(255, 200, 50, 0.4)',
+          'swipe': 'rgba(200, 100, 255, 0.3)',
+        };
+        const color = colors[handState.gesture] || 'rgba(255,255,255,0.1)';
+
+        // Outer glow
+        const gradient = ctx.createRadialGradient(x, y, 0, x, y, 120);
+        gradient.addColorStop(0, color.replace('0.3', '0.1').replace('0.4', '0.15'));
+        gradient.addColorStop(1, 'transparent');
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(x, y, 120, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Center dot
+        ctx.beginPath();
+        ctx.arc(x, y, 6, 0, Math.PI * 2);
+        ctx.fillStyle = color.replace('0.3', '0.6').replace('0.4', '0.8');
+        ctx.fill();
+      }
+
+      requestAnimationFrame(animate);
+    }
+
+    // ============ Start ============
+    async function start() {
+      try { await camera.start(); } catch (e) {
+        console.log('Camera start error:', e);
+      }
+
+      document.getElementById('loading').classList.add('hidden');
+      document.getElementById('tutorial').classList.add('show');
+      setTimeout(() => {
+        document.getElementById('tutorial').classList.remove('show');
+      }, 8000);
+
+      setTimeout(() => checkAIServer(), 1000);
+
+      animate();
+    }
+
+    start();
+
+    // Handle resize
+    window.addEventListener('resize', () => {
+      particles.forEach(p => {
+        p.baseX = Math.random() * W;
+        p.baseY = Math.random() * H;
+      });
+    });
+  </script>
+</body>
+</html>
