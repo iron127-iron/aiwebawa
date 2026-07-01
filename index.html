@@ -474,60 +474,91 @@
     };
 
     // ============ Gesture Recognition ============
+    // Gesture smoothing buffer
+    let gestureHistory = [];
+    const GESTURE_HISTORY_SIZE = 5;
+
+    function smoothGesture(newGesture) {
+      gestureHistory.push(newGesture);
+      if (gestureHistory.length > GESTURE_HISTORY_SIZE) gestureHistory.shift();
+      const counts = {};
+      let maxCount = 0, best = 'none';
+      for (const g of gestureHistory) {
+        counts[g] = (counts[g] || 0) + 1;
+        if (counts[g] > maxCount) { maxCount = counts[g]; best = g; }
+      }
+      // Require majority (at least 60%)
+      return maxCount >= Math.ceil(GESTURE_HISTORY_SIZE * 0.6) ? best : gestureHistory[gestureHistory.length - 1];
+    }
+
     function recognizeGesture(landmarks) {
-      // Landmark indices
       const WRIST = 0;
-      const THUMB_TIP = 4;
-      const INDEX_TIP = 8;
-      const INDEX_PIP = 6;
-      const INDEX_MCP = 5;
-      const MIDDLE_TIP = 12;
-      const MIDDLE_PIP = 10;
-      const RING_TIP = 16;
-      const RING_PIP = 14;
-      const PINKY_TIP = 20;
-      const PINKY_PIP = 18;
+      const THUMB_TIP = 4, THUMB_IP = 3, THUMB_MCP = 2;
+      const INDEX_TIP = 8, INDEX_PIP = 6, INDEX_MCP = 5;
+      const MIDDLE_TIP = 12, MIDDLE_PIP = 10;
+      const RING_TIP = 16, RING_PIP = 14;
+      const PINKY_TIP = 20, PINKY_PIP = 18;
 
-      // Helper: distance between two landmarks
-      const dist = (a, b) => Math.sqrt(
-        (landmarks[a].x - landmarks[b].x) ** 2 +
-        (landmarks[a].y - landmarks[b].y) ** 2
-      );
-
-      // Helper: is finger extended? (tip farther from MCP than PIP is)
-      const isExtended = (tip, pip, mcp) => {
-        const tipToMcp = dist(tip, mcp);
-        const pipToMcp = dist(pip, mcp);
-        return tipToMcp > pipToMcp * 1.15;
+      const dist = (a, b) => {
+        const dx = landmarks[a].x - landmarks[b].x;
+        const dy = landmarks[a].y - landmarks[b].y;
+        return Math.sqrt(dx * dx + dy * dy);
       };
 
-      const thumbExt = isExtended(THUMB_TIP, 3, 2);
-      const indexExt = isExtended(INDEX_TIP, INDEX_PIP, INDEX_MCP);
-      const middleExt = isExtended(MIDDLE_TIP, MIDDLE_PIP, 9);
-      const ringExt = isExtended(RING_TIP, RING_PIP, 13);
-      const pinkyExt = isExtended(PINKY_TIP, PINKY_PIP, 17);
+      // Hand size = wrist to middle MCP, used for relative thresholds
+      const handSize = dist(WRIST, 9);
 
-      // Pinch: thumb tip close to index tip
-      const pinchDist = dist(THUMB_TIP, INDEX_TIP);
-      const isPinch = pinchDist < 0.06;
+      // Finger extension: compare fingertip-to-palm vs PIP-to-palm
+      // Using palm center (average of wrist + knuckles) for stability
+      const palmX = (landmarks[WRIST].x + landmarks[INDEX_MCP].x + landmarks[9].x + landmarks[13].x + landmarks[17].x) / 5;
+      const palmY = (landmarks[WRIST].y + landmarks[INDEX_MCP].y + landmarks[9].y + landmarks[13].y + landmarks[17].y) / 5;
+      const toPalm = (idx) => {
+        const dx = landmarks[idx].x - palmX;
+        const dy = landmarks[idx].y - palmY;
+        return Math.sqrt(dx * dx + dy * dy);
+      };
 
-      // Count extended fingers
-      const extendedCount = [indexExt, middleExt, ringExt, pinkyExt].filter(Boolean).length;
+      const tipExt = (tip, pip) => {
+        const tipD = toPalm(tip);
+        const pipD = toPalm(pip);
+        return tipD > pipD * 1.2;
+      };
+
+      const thumbExt = tipExt(THUMB_TIP, THUMB_IP);
+      const indexExt = tipExt(INDEX_TIP, INDEX_PIP);
+      const middleExt = tipExt(MIDDLE_TIP, MIDDLE_PIP);
+      const ringExt = tipExt(RING_TIP, RING_PIP);
+      const pinkyExt = tipExt(PINKY_TIP, PINKY_PIP);
+
+      // Relative pinch distance (normalized by hand size)
+      const pinchDist = dist(THUMB_TIP, INDEX_TIP) / (handSize || 0.01);
+      const isPinch = pinchDist < 0.25;
+
+      const exts = [indexExt, middleExt, ringExt, pinkyExt];
+      const extCount = exts.filter(Boolean).length;
       const allExtended = thumbExt && indexExt && middleExt && ringExt && pinkyExt;
 
+      let gesture, pinchPos = null;
+
       if (isPinch) {
-        return { gesture: 'pinch', pinchPos: {
+        gesture = 'pinch';
+        pinchPos = {
           x: (landmarks[THUMB_TIP].x + landmarks[INDEX_TIP].x) / 2 * W,
           y: (landmarks[THUMB_TIP].y + landmarks[INDEX_TIP].y) / 2 * H,
-        }};
+        };
+      } else if (allExtended) {
+        gesture = 'open';
+      } else if (extCount === 0 && !thumbExt) {
+        gesture = 'fist';
+      } else if (indexExt && extCount === 1) {
+        gesture = 'point';
+      } else if (indexExt && middleExt && extCount === 2) {
+        gesture = 'peace';
+      } else {
+        gesture = 'none';
       }
 
-      if (allExtended) return { gesture: 'open' };
-      if (extendedCount === 0 && !thumbExt) return { gesture: 'fist' };
-      if (indexExt && !middleExt && !ringExt && !pinkyExt) return { gesture: 'point' };
-      if (indexExt && middleExt && !ringExt && !pinkyExt) return { gesture: 'peace' };
-
-      return { gesture: 'open' };
+      return { gesture: smoothGesture(gesture), pinchPos };
     }
 
     function detectSwipe(currentX, currentY) {
@@ -717,9 +748,14 @@
         handState.handPos = { x: handX, y: handY };
         handState.pinchPos = result.pinchPos || null;
 
-        const swipe = detectSwipe(handX, handY);
-        if (swipe) { handState.swipeDir = swipe; handState.gesture = 'swipe'; }
-        else { handState.swipeDir = null; }
+        // Swipe only when gesture is 'open' or 'none' (not during pinch/fist/point)
+        if (handState.gesture === 'open' || handState.gesture === 'none') {
+          const swipe = detectSwipe(handX, handY);
+          if (swipe) { handState.swipeDir = swipe; handState.gesture = 'swipe'; }
+          else { handState.swipeDir = null; }
+        } else {
+          handState.swipeDir = null;
+        }
 
         const labels = {
           'open': '🖐 張開', 'fist': '✊ 握拳', 'point': '☝️ 食指',
@@ -732,6 +768,7 @@
         handState.handPos = null;
         handState.pinchPos = null;
         handState.swipeDir = null;
+        gestureHistory = [];  // reset smoothing buffer
         updateGestureLabel('等待手勢...');
       }
     });
