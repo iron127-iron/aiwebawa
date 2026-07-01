@@ -370,7 +370,8 @@
       const maxSpeed = 8;
       const damp = 0.96;
 
-      for (let i = 0; i < CONFIG.particleCount; i++) {
+      const limit = targetParticles;
+      for (let i = 0; i < limit; i++) {
         const p = particles[i];
 
         if (hasHand) {
@@ -437,25 +438,13 @@
     }
 
     function drawParticles() {
-      const alpha = CONFIG.trailAlpha;
-      for (let i = 0; i < CONFIG.particleCount; i++) {
+      ctx.shadowBlur = 8;
+      for (let i = 0; i < targetParticles; i++) {
         const p = particles[i];
-        const a = p.alpha * alpha;
+        ctx.shadowColor = `hsla(${p.hue},80%,60%,${p.alpha * CONFIG.trailAlpha * 0.15})`;
+        ctx.fillStyle = `hsla(${p.hue},${p.sat}%,${p.light}%,${p.alpha * CONFIG.trailAlpha})`;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-        ctx.fillStyle = `hsla(${p.hue},${p.sat}%,${p.light}%,${a})`;
-        ctx.fill();
-      }
-    }
-
-    function drawGlow() {
-      ctx.shadowBlur = 15;
-      for (let i = 0; i < CONFIG.particleCount; i++) {
-        const p = particles[i];
-        const a = p.alpha * CONFIG.trailAlpha * 0.3;
-        ctx.shadowColor = `hsla(${p.hue},80%,60%,${a})`;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.size * 0.5, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, p.size * 0.6, 0, Math.PI * 2);
         ctx.fill();
       }
       ctx.shadowBlur = 0;
@@ -781,8 +770,11 @@
       }
     });
 
+    let camFrame = 0;
     const camera = new Camera(videoElement, {
       onFrame: async () => {
+        camFrame++;
+        if (camFrame % 3 !== 0) return; // process every 3rd frame
         try { await hands.send({ image: videoElement }); } catch (e) {}
       },
       width: 320, height: 240,
@@ -803,7 +795,7 @@
         triggerExplosion(W / 2, H / 2);
       }
       if (e.key === 'r' || e.key === 'R') {
-        for (let i = 0; i < particles.length; i++) resetParticle(particles[i]);
+        for (let i = 0; i < targetParticles; i++) resetParticle(particles[i]);
       }
     });
 
@@ -851,10 +843,10 @@
     function drawConnectingLines() {
       const maxDist = 80;
       const maxDistSq = maxDist * maxDist;
-      // Spatial grid for O(n) neighbor lookup
       const grid = {};
       const cellSize = maxDist;
-      for (let i = 0; i < particles.length; i++) {
+      const limit = targetParticles;
+      for (let i = 0; i < limit; i++) {
         const p = particles[i];
         const cx = (p.x / cellSize) | 0;
         const cy = (p.y / cellSize) | 0;
@@ -862,7 +854,7 @@
         if (!grid[key]) grid[key] = [];
         grid[key].push(i);
       }
-      for (let i = 0; i < particles.length; i++) {
+      for (let i = 0; i < limit; i++) {
         const p = particles[i];
         const cx = (p.x / cellSize) | 0;
         const cy = (p.y / cellSize) | 0;
@@ -895,11 +887,27 @@
     }
 
     let frameCount = 0, lastFpsUpdate = 0;
+    let skipFrame = false;
+    let lowFpsCount = 0;
+    let targetParticles = CONFIG.particleCount;
 
     function animate(timestamp) {
       frameCount++;
+      skipFrame = !skipFrame;
+
       if (timestamp - lastFpsUpdate > 1000) {
-        document.getElementById('fps').textContent = `${frameCount} FPS | ${particles.length} particles`;
+        document.getElementById('fps').textContent = `${frameCount} FPS | ${targetParticles} particles`;
+        if (frameCount < 30) {
+          lowFpsCount++;
+          if (lowFpsCount > 3) {
+            targetParticles = Math.max(100, targetParticles - 50);
+            lowFpsCount = 0;
+          }
+        } else if (frameCount > 50 && targetParticles < CONFIG.particleCount) {
+          targetParticles = Math.min(CONFIG.particleCount, targetParticles + 50);
+        } else {
+          lowFpsCount = 0;
+        }
         frameCount = 0;
         lastFpsUpdate = timestamp;
       }
@@ -907,7 +915,6 @@
       ctx.fillStyle = `rgba(10, 10, 26, ${CONFIG.trailAlpha})`;
       ctx.fillRect(0, 0, W, H);
 
-      // Update & draw particles
       const forces = {
         handPos: handState.handPos,
         gesture: handState.gesture,
@@ -916,35 +923,33 @@
       };
 
       updateParticles(forces);
-      drawParticles();
-      drawGlow();
-      drawConnectingLines();
 
-      // Draw hand indicator
+      // Draw particles (with glow baked in, single pass)
+      drawParticles();
+
+      // Connecting lines every other frame (skip when idle)
+      if (!skipFrame && (handState.detected || handState.pinchPos)) {
+        drawConnectingLines();
+      }
+
+      // Hand indicator (simplified, no gradient per frame)
       if (handState.handPos && handState.detected) {
         const { x, y } = handState.handPos;
         const colors = {
-          'open': 'rgba(100, 200, 255, 0.3)',
-          'fist': 'rgba(255, 100, 100, 0.3)',
-          'point': 'rgba(100, 255, 100, 0.3)',
-          'pinch': 'rgba(255, 200, 50, 0.4)',
-          'swipe': 'rgba(200, 100, 255, 0.3)',
+          'open': 'rgba(100, 200, 255, 0.25)',
+          'fist': 'rgba(255, 100, 100, 0.25)',
+          'point': 'rgba(100, 255, 100, 0.25)',
+          'pinch': 'rgba(255, 200, 50, 0.3)',
+          'swipe': 'rgba(200, 100, 255, 0.25)',
         };
-        const color = colors[handState.gesture] || 'rgba(255,255,255,0.1)';
-
-        // Outer glow
-        const gradient = ctx.createRadialGradient(x, y, 0, x, y, 120);
-        gradient.addColorStop(0, color.replace('0.3', '0.1').replace('0.4', '0.15'));
-        gradient.addColorStop(1, 'transparent');
-        ctx.fillStyle = gradient;
+        const c = colors[handState.gesture] || 'rgba(255,255,255,0.1)';
         ctx.beginPath();
-        ctx.arc(x, y, 120, 0, Math.PI * 2);
+        ctx.arc(x, y, 60, 0, Math.PI * 2);
+        ctx.fillStyle = c;
         ctx.fill();
-
-        // Center dot
         ctx.beginPath();
-        ctx.arc(x, y, 6, 0, Math.PI * 2);
-        ctx.fillStyle = color.replace('0.3', '0.6').replace('0.4', '0.8');
+        ctx.arc(x, y, 4, 0, Math.PI * 2);
+        ctx.fillStyle = c.replace('0.25', '0.6').replace('0.3', '0.8');
         ctx.fill();
       }
 
